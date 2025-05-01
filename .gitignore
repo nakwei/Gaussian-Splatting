@@ -1,0 +1,6 @@
+output/
+*.db
+*.npz
+*.bin
+*.MOV
+__pycache__/
