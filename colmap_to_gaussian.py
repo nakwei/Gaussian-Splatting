@@ -25,7 +25,9 @@ def gaussian_pathway(input, output_path = None):
     positions = np.array(positions, dtype=np.float32)
     colors = np.array(colors, dtype=np.float32)
     scale = np.array(scale, dtype=np.float32)
+    print(scale)
     opacity = np.array(opacity, dtype=np.float32)
+    print(opacity)
     if output_path == None:
         output_path = './output_guassians.npz'
     np.savez(output_path, positions = positions,
