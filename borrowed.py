@@ -13,6 +13,21 @@ from torch.autograd import Variable
 from PIL import Image
 
 
+class Camera:
+    def __init__(self, id, width, height, fx, fy, cx, cy, Rcw, tcw, path):
+        self.id = id
+        self.width = width
+        self.height = height
+        self.fx = fx
+        self.fy = fy
+        self.cx = cx
+        self.cy = cy
+        self.Rcw = Rcw
+        self.tcw = tcw
+        self.twc = -torch.linalg.inv(Rcw) @ tcw
+        self.path = path
+
+
 
 
 def get_training_params(gs):
