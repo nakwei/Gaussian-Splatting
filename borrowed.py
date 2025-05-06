@@ -289,3 +289,30 @@ def get_rots(x):
 
 def get_shs(low_shs, high_shs):
     return torch.cat((low_shs, high_shs), dim=1)
+
+
+def save_training_params(fn, training_params):
+    pws = training_params["pws"]
+    shs = get_shs(training_params["low_shs"], training_params["high_shs"])
+    alphas = get_alphas(training_params["alphas_raw"])
+    scales = get_scales(training_params["scales_raw"])
+    rots = get_rots(training_params["rots_raw"])
+
+    rots = rots.detach().cpu().numpy()
+    scales = scales.detach().cpu().numpy()
+    shs = shs.detach().cpu().numpy()
+    alphas = alphas.detach().cpu().numpy().squeeze()
+    pws = pws.detach().cpu().numpy()
+    dtypes = gsdata_type(shs.shape[1])
+    gs = np.rec.fromarrays(
+        [pws, rots, scales, alphas, shs], dtype=dtypes)
+    np.save(fn, gs)
+
+
+
+def gsdata_type(sh_dim):
+    return [('pw', '<f4', (3,)),
+            ('rot', '<f4', (4,)),
+            ('scale', '<f4', (3,)),
+            ('alpha', '<f4'),
+            ('sh', '<f4', (sh_dim))]
