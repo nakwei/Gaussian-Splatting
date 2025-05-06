@@ -11,6 +11,7 @@ import faiss
 from read_write_model import *
 from torch.autograd import Variable
 from PIL import Image
+from gsmodel import *
 
 
 class Camera:
