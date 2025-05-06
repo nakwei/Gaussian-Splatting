@@ -1,6 +1,6 @@
 import torch
-import gsplatcu as gsc
-from borrowed import *
+import gsplatcu as gsc   
+
 
 
 class GSFunction(torch.autograd.Function):
