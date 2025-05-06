@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from read_write_model import *
 from borrowed import *
+from gsmodel import *
 
 
 
