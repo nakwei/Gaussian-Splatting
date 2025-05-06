@@ -115,8 +115,8 @@ def read_points_bin_as_gau(path_to_model_file):
 def get_cameras_and_images(path):
     device = 'cuda'
 
-    camera_params = read_cameras_binary(os.path.join(path, "cameras.bin"))
-    image_params = read_images_binary(os.path.join(path, "images.bin"))
+    camera_params = read_cameras_binary(os.path.join(Path(path, "sparse/0"), "cameras.bin"))
+    image_params = read_images_binary(os.path.join(Path(path, "sparse/0"), "images.bin"))
     cameras = []
     images = []
     for image_param in image_params.values():

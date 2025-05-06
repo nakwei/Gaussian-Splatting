@@ -21,7 +21,7 @@ if __name__ == "__main__":
     gs = read_points_bin_as_gau(Path(args.path, "sparse/0/points3D.bin"))
 
     training_params, adam_params = get_training_params(gs) 
-    cameras, images = get_cameras_and_images(Path(args.path, "sparse/0/points3D.bin"))
+    cameras, images = get_cameras_and_images(args.path)
     #points = needs to be the actual points
      
     # path = "/home/liu/bag/gaussian-splatting/tandt/train"
