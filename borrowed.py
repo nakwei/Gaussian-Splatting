@@ -12,6 +12,7 @@ from read_write_model import *
 from torch.autograd import Variable
 from PIL import Image
 from plyfile import PlyData, PlyElement
+import open3d as o3d
 #from gsmodel import *
 
 
@@ -291,23 +292,30 @@ def get_rots(x):
 def get_shs(low_shs, high_shs):
     return torch.cat((low_shs, high_shs), dim=1)
 
+def export_gaussians_to_ply(gaussians, filename):
+    xyz = gaussians.get_xyz.detach().cpu().numpy()
+    colors_dc = gaussians.get_features_dc.detach().squeeze(1).cpu().numpy()  
+    colors = (colors_dc + 0.5).clip(0, 1)
 
-_kind_map = {
-    'f4': 'float',
-    'f8': 'double',
-    'i4': 'int',
-    'i8': 'int',
-    'u1': 'uchar',
-    'u2': 'ushort',
-    'u4': 'uint',
-}
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(xyz)
+    pcd.colors = o3d.utility.Vector3dVector(colors)
+    o3d.io.write_point_cloud(filename, pcd)
 
-def _ply_type(dt):
-    code = dt.str.lstrip('<>')    # e.g. 'f4'
-    return _kind_map.get(code, 'float')
+def save_training_params2(fn, training_params):
+    pws = training_params["pws"]
+    shs = get_shs(training_params["low_shs"], training_params["high_shs"])
+    
+    colors_dc = shs.detach().cpu().numpy()  
+    colors = (colors_dc + 0.5).clip(0, 1)
+    xyz = pws.detach().cpu().numpy()
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(xyz)
+    pcd.colors = o3d.utility.Vector3dVector(colors)
+    o3d.io.write_point_cloud(fn, pcd)
 
 
-def save_training_params(fn, training_params):
+def save_training_params_ply(fn, training_params):
     pws = training_params["pws"]
     shs = get_shs(training_params["low_shs"], training_params["high_shs"])
     alphas = get_alphas(training_params["alphas_raw"])
@@ -359,6 +367,22 @@ def save_training_params(fn, training_params):
     el = PlyElement.describe(ply_data, 'vertex')
     PlyData([el], text=True).write(fn)
 
+def save_training_params(fn, training_params):
+    pws = training_params["pws"]
+    shs = get_shs(training_params["low_shs"], training_params["high_shs"])
+    alphas = get_alphas(training_params["alphas_raw"])
+    scales = get_scales(training_params["scales_raw"])
+    rots = get_rots(training_params["rots_raw"])
+
+    rots = rots.detach().cpu().numpy()
+    scales = scales.detach().cpu().numpy()
+    shs = shs.detach().cpu().numpy()
+    alphas = alphas.detach().cpu().numpy().squeeze()
+    pws = pws.detach().cpu().numpy()
+    dtypes = gsdata_type(shs.shape[1])
+    gs = np.rec.fromarrays(
+        [pws, rots, scales, alphas, shs], dtype=dtypes)
+    np.save(fn, gs)
 
 # dtype generator remains unchanged
 def gsdata_type(sh_dim):
