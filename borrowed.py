@@ -12,7 +12,6 @@ from read_write_model import *
 from torch.autograd import Variable
 from PIL import Image
 from plyfile import PlyData, PlyElement
-import open3d as o3d
 #from gsmodel import *
 
 
@@ -292,27 +291,7 @@ def get_rots(x):
 def get_shs(low_shs, high_shs):
     return torch.cat((low_shs, high_shs), dim=1)
 
-def export_gaussians_to_ply(gaussians, filename):
-    xyz = gaussians.get_xyz.detach().cpu().numpy()
-    colors_dc = gaussians.get_features_dc.detach().squeeze(1).cpu().numpy()  
-    colors = (colors_dc + 0.5).clip(0, 1)
 
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(xyz)
-    pcd.colors = o3d.utility.Vector3dVector(colors)
-    o3d.io.write_point_cloud(filename, pcd)
-
-def save_training_params2(fn, training_params):
-    pws = training_params["pws"]
-    shs = get_shs(training_params["low_shs"], training_params["high_shs"])
-    
-    colors_dc = shs.detach().cpu().numpy()  
-    colors = (colors_dc + 0.5).clip(0, 1)
-    xyz = pws.detach().cpu().numpy()
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(xyz)
-    pcd.colors = o3d.utility.Vector3dVector(colors)
-    o3d.io.write_point_cloud(fn, pcd)
 
 
 def save_training_params_ply(fn, training_params):
@@ -322,50 +301,63 @@ def save_training_params_ply(fn, training_params):
     scales = get_scales(training_params["scales_raw"])
     rots = get_rots(training_params["rots_raw"])
 
-    # Convert to numpy
+    # Convert to numpy arrays
     pws = pws.detach().cpu().numpy()
-    rots = rots.detach().cpu().numpy()
-    scales = scales.detach().cpu().numpy()
-    alphas = alphas.detach().cpu().numpy().squeeze()
     shs = shs.detach().cpu().numpy()
+    alphas = alphas.detach().cpu().numpy().squeeze()
+    scales = scales.detach().cpu().numpy()
+    rots = rots.detach().cpu().numpy()
 
-    num_points = pws.shape[0]
-    num_sh_coeffs = shs.shape[1]
+    # Compute log-scale (since reader expects exp scale later)
+    scales = np.log(scales)
 
-    # Flatten rotations if they are matrices/quaternions
-    rots_flat = rots.reshape((num_points, -1))
-    scales_flat = scales.reshape((num_points, -1))
+    num_pts = pws.shape[0]
+    num_sh = shs.shape[1]
+    sh_rest_dim = num_sh - 3
 
-    # Build structured array for PLY
-    dtype_fields = [
+    # PLY dtype declaration
+    vertex_dtype = [
         ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
-    ]
-    dtype_fields += [(f'scale_{i}', 'f4') for i in range(scales_flat.shape[1])]
-    dtype_fields += [(f'rot_{i}', 'f4') for i in range(rots_flat.shape[1])]
-    dtype_fields += [('alpha', 'f4')]
-    dtype_fields += [(f'sh_{i}', 'f4') for i in range(num_sh_coeffs)]
+        ('opacity', 'f4'),
+        ('scale_0', 'f4'), ('scale_1', 'f4'), ('scale_2', 'f4'),
+        ('rot_0', 'f4'), ('rot_1', 'f4'), ('rot_2', 'f4'), ('rot_3', 'f4'),
+        ('f_dc_0', 'f4'), ('f_dc_1', 'f4'), ('f_dc_2', 'f4'),
+    ] + [(f'f_rest_{i}', 'f4') for i in range(sh_rest_dim)]
 
-    ply_data = np.empty(num_points, dtype=dtype_fields)
+    ply_data = np.empty(num_pts, dtype=vertex_dtype)
 
-    # Fill in values
     ply_data['x'] = pws[:, 0]
     ply_data['y'] = pws[:, 1]
     ply_data['z'] = pws[:, 2]
 
-    for i in range(scales_flat.shape[1]):
-        ply_data[f'scale_{i}'] = scales_flat[:, i]
+    # Apply inverse sigmoid so sigmoid(opacity) = alpha
+    ply_data['opacity'] = np.log(alphas / (1.0 - alphas + 1e-9) + 1e-9)
 
-    for i in range(rots_flat.shape[1]):
-        ply_data[f'rot_{i}'] = rots_flat[:, i]
+    ply_data['scale_0'] = scales[:, 0]
+    ply_data['scale_1'] = scales[:, 1]
+    ply_data['scale_2'] = scales[:, 2]
 
-    ply_data['alpha'] = alphas
+    # Normalize quaternion
+    rots /= np.linalg.norm(rots, axis=1, keepdims=True)
+    ply_data['rot_0'] = rots[:, 0]
+    ply_data['rot_1'] = rots[:, 1]
+    ply_data['rot_2'] = rots[:, 2]
+    ply_data['rot_3'] = rots[:, 3]
 
-    for i in range(num_sh_coeffs):
-        ply_data[f'sh_{i}'] = shs[:, i]
+    # SH coefficients
+    ply_data['f_dc_0'] = shs[:, 0]
+    ply_data['f_dc_1'] = shs[:, 1]
+    ply_data['f_dc_2'] = shs[:, 2]
 
-    # Write to PLY
+    # Reshape SH rest to match original format: (..., 3, rest//3)
+    sh_rest = shs[:, 3:].reshape(-1, sh_rest_dim // 3, 3).transpose(0, 2, 1).reshape(num_pts, -1)
+    for i in range(sh_rest_dim):
+        ply_data[f'f_rest_{i}'] = sh_rest[:, i]
+
+    # Write PLY
     el = PlyElement.describe(ply_data, 'vertex')
     PlyData([el], text=True).write(fn)
+    
 
 def save_training_params(fn, training_params):
     pws = training_params["pws"]
@@ -382,6 +374,8 @@ def save_training_params(fn, training_params):
     dtypes = gsdata_type(shs.shape[1])
     gs = np.rec.fromarrays(
         [pws, rots, scales, alphas, shs], dtype=dtypes)
+    print(gs)
+
     np.save(fn, gs)
 
 # dtype generator remains unchanged
@@ -391,3 +385,4 @@ def gsdata_type(sh_dim):
              ('scale', '<f4', (3,)),
              ('alpha', '<f4'),
              ('sh', '<f4', (sh_dim,))]
+
