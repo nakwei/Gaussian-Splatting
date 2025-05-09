@@ -11,6 +11,7 @@ import faiss
 from read_write_model import *
 from torch.autograd import Variable
 from PIL import Image
+from plyfile import PlyData, PlyElement
 #from gsmodel import *
 
 
@@ -306,55 +307,58 @@ def _ply_type(dt):
     return _kind_map.get(code, 'float')
 
 
-def save_training_params(fn, training_params):
-    # Build recarray as before
-    pws    = training_params["pws"]
-    shs    = get_shs(training_params["low_shs"], training_params["high_shs"])
+def save_training_params_ply(fn, training_params):
+    pws = training_params["pws"]
+    shs = get_shs(training_params["low_shs"], training_params["high_shs"])
     alphas = get_alphas(training_params["alphas_raw"])
     scales = get_scales(training_params["scales_raw"])
-    rots   = get_rots(training_params["rots_raw"])
-    
-    rots   = rots.detach().cpu().numpy()
+    rots = get_rots(training_params["rots_raw"])
+
+    # Convert to numpy
+    pws = pws.detach().cpu().numpy()
+    rots = rots.detach().cpu().numpy()
     scales = scales.detach().cpu().numpy()
-    shs    = shs.detach().cpu().numpy()
     alphas = alphas.detach().cpu().numpy().squeeze()
-    pws    = pws.detach().cpu().numpy()
-    
-    dtypes = gsdata_type(shs.shape[1])
-    gaussians = np.rec.fromarrays([pws, rots, scales, alphas, shs], dtype=dtypes)
-    
-    # NPY fallback
-    if fn.lower().endswith('.npy'):
-        np.save(fn, gaussians)
-        return
-    
-    # PLY output
-    N = len(gaussians)
-    names = gaussians.dtype.names
-    with open(fn, 'w') as f:
-        # Header
-        f.write("ply\n")
-        f.write("format ascii 1.0\n")
-        f.write(f"element vertex {N}\n")
-        for name in names:
-            prop = 'opacity' if name == 'alpha' else name
-            dt, _ = gaussians.dtype.fields[name]
-            if dt.shape:  # vector
-                for i in range(dt.shape[0]):
-                    f.write(f"property {_ply_type(dt.base)} {prop}_{i}\n")
-            else:
-                f.write(f"property {_ply_type(dt)} {prop}\n")
-        f.write("end_header\n")
-        # Data rows
-        for g in gaussians:
-            vals = []
-            for name in names:
-                v = g[name]
-                if isinstance(v, np.ndarray):
-                    vals.extend(v.tolist())
-                else:
-                    vals.append(float(v))
-            f.write(" ".join(map(str, vals)) + "\n")
+    shs = shs.detach().cpu().numpy()
+
+    num_points = pws.shape[0]
+    num_sh_coeffs = shs.shape[1]
+
+    # Flatten rotations if they are matrices/quaternions
+    rots_flat = rots.reshape((num_points, -1))
+    scales_flat = scales.reshape((num_points, -1))
+
+    # Build structured array for PLY
+    dtype_fields = [
+        ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
+    ]
+    dtype_fields += [(f'scale_{i}', 'f4') for i in range(scales_flat.shape[1])]
+    dtype_fields += [(f'rot_{i}', 'f4') for i in range(rots_flat.shape[1])]
+    dtype_fields += [('alpha', 'f4')]
+    dtype_fields += [(f'sh_{i}', 'f4') for i in range(num_sh_coeffs)]
+
+    ply_data = np.empty(num_points, dtype=dtype_fields)
+
+    # Fill in values
+    ply_data['x'] = pws[:, 0]
+    ply_data['y'] = pws[:, 1]
+    ply_data['z'] = pws[:, 2]
+
+    for i in range(scales_flat.shape[1]):
+        ply_data[f'scale_{i}'] = scales_flat[:, i]
+
+    for i in range(rots_flat.shape[1]):
+        ply_data[f'rot_{i}'] = rots_flat[:, i]
+
+    ply_data['alpha'] = alphas
+
+    for i in range(num_sh_coeffs):
+        ply_data[f'sh_{i}'] = shs[:, i]
+
+    # Write to PLY
+    el = PlyElement.describe(ply_data, 'vertex')
+    PlyData([el], text=True).write(fn)
+
 
 # dtype generator remains unchanged
 def gsdata_type(sh_dim):
