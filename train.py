@@ -80,6 +80,6 @@ if __name__ == "__main__":
                     model.reset_alpha(training_params, optimizer)
 
     #this doesn't need to be a function in our implementation:
-    save_training_params('data/final.npy', training_params)
+    save_training_params('data/plswork.ply', training_params)
  
 
