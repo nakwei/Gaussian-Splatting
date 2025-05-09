@@ -291,28 +291,75 @@ def get_shs(low_shs, high_shs):
     return torch.cat((low_shs, high_shs), dim=1)
 
 
+_kind_map = {
+    'f4': 'float',
+    'f8': 'double',
+    'i4': 'int',
+    'i8': 'int',
+    'u1': 'uchar',
+    'u2': 'ushort',
+    'u4': 'uint',
+}
+
+def _ply_type(dt):
+    code = dt.str.lstrip('<>')    # e.g. 'f4'
+    return _kind_map.get(code, 'float')
+
+
 def save_training_params(fn, training_params):
-    pws = training_params["pws"]
-    shs = get_shs(training_params["low_shs"], training_params["high_shs"])
+    # Build recarray as before
+    pws    = training_params["pws"]
+    shs    = get_shs(training_params["low_shs"], training_params["high_shs"])
     alphas = get_alphas(training_params["alphas_raw"])
     scales = get_scales(training_params["scales_raw"])
-    rots = get_rots(training_params["rots_raw"])
-
-    rots = rots.detach().cpu().numpy()
+    rots   = get_rots(training_params["rots_raw"])
+    
+    rots   = rots.detach().cpu().numpy()
     scales = scales.detach().cpu().numpy()
-    shs = shs.detach().cpu().numpy()
+    shs    = shs.detach().cpu().numpy()
     alphas = alphas.detach().cpu().numpy().squeeze()
-    pws = pws.detach().cpu().numpy()
+    pws    = pws.detach().cpu().numpy()
+    
     dtypes = gsdata_type(shs.shape[1])
-    gs = np.rec.fromarrays(
-        [pws, rots, scales, alphas, shs], dtype=dtypes)
-    np.save(fn, gs)
+    gaussians = np.rec.fromarrays([pws, rots, scales, alphas, shs], dtype=dtypes)
+    
+    # NPY fallback
+    if fn.lower().endswith('.npy'):
+        np.save(fn, gaussians)
+        return
+    
+    # PLY output
+    N = len(gaussians)
+    names = gaussians.dtype.names
+    with open(fn, 'w') as f:
+        # Header
+        f.write("ply\n")
+        f.write("format ascii 1.0\n")
+        f.write(f"element vertex {N}\n")
+        for name in names:
+            prop = 'opacity' if name == 'alpha' else name
+            dt, _ = gaussians.dtype.fields[name]
+            if dt.shape:  # vector
+                for i in range(dt.shape[0]):
+                    f.write(f"property {_ply_type(dt.base)} {prop}_{i}\n")
+            else:
+                f.write(f"property {_ply_type(dt)} {prop}\n")
+        f.write("end_header\n")
+        # Data rows
+        for g in gaussians:
+            vals = []
+            for name in names:
+                v = g[name]
+                if isinstance(v, np.ndarray):
+                    vals.extend(v.tolist())
+                else:
+                    vals.append(float(v))
+            f.write(" ".join(map(str, vals)) + "\n")
 
-
-
+# dtype generator remains unchanged
 def gsdata_type(sh_dim):
-    return [('pw', '<f4', (3,)),
-            ('rot', '<f4', (4,)),
-            ('scale', '<f4', (3,)),
-            ('alpha', '<f4'),
-            ('sh', '<f4', (sh_dim))]
+     return [('pw', '<f4', (3,)),
+             ('rot', '<f4', (4,)),
+             ('scale', '<f4', (3,)),
+             ('alpha', '<f4'),
+             ('sh', '<f4', (sh_dim,))]
