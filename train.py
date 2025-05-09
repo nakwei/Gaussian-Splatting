@@ -34,7 +34,7 @@ if __name__ == "__main__":
 
     optimizer = optim.Adam(adam_params, lr=0.000, eps=1e-15) #we can fine tune these
 
-    epochs = 100 #we can fine tune this
+    epochs = 10 #we can fine tune this
     n = len(images)
 
     twcs = torch.stack([x.twc for x in cameras])

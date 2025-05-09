@@ -307,7 +307,7 @@ def _ply_type(dt):
     return _kind_map.get(code, 'float')
 
 
-def save_training_params_ply(fn, training_params):
+def save_training_params(fn, training_params):
     pws = training_params["pws"]
     shs = get_shs(training_params["low_shs"], training_params["high_shs"])
     alphas = get_alphas(training_params["alphas_raw"])
