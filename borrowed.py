@@ -308,8 +308,6 @@ def save_training_params(fn, training_params):
     dtypes = gsdata_type(shs.shape[1])
     gs = np.rec.fromarrays(
         [pws, rots, scales, alphas, shs], dtype=dtypes)
-    print(gs)
-
     np.save(fn, gs)
 
 # dtype generator remains unchanged
