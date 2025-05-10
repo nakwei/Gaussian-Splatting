@@ -1,9 +1,8 @@
 
 import torch
+import os
 import numpy as np
 from math import exp
-import torch.optim as optim
-import matplotlib.pyplot as plt
 import torch.nn.functional as F
 import torchvision
 from pathlib import Path
@@ -305,61 +304,88 @@ def _ply_type(dt):
     code = dt.str.lstrip('<>')    # e.g. 'f4'
     return _kind_map.get(code, 'float')
 
-
-def save_training_params(fn, training_params):
-    # Build recarray as before
-    pws    = training_params["pws"]
-    shs    = get_shs(training_params["low_shs"], training_params["high_shs"])
-    alphas = get_alphas(training_params["alphas_raw"])
-    scales = get_scales(training_params["scales_raw"])
-    rots   = get_rots(training_params["rots_raw"])
-    
-    rots   = rots.detach().cpu().numpy()
-    scales = scales.detach().cpu().numpy()
-    shs    = shs.detach().cpu().numpy()
-    alphas = alphas.detach().cpu().numpy().squeeze()
-    pws    = pws.detach().cpu().numpy()
-    
-    dtypes = gsdata_type(shs.shape[1])
-    gaussians = np.rec.fromarrays([pws, rots, scales, alphas, shs], dtype=dtypes)
-    
-    # NPY fallback
-    if fn.lower().endswith('.npy'):
-        np.save(fn, gaussians)
-        return
-    
-    # PLY output
-    N = len(gaussians)
-    names = gaussians.dtype.names
+def write_gaussians_as_ply(fn:str, arr:np.recarray):
+    """
+    Save a structured Gaussian recarray produced by save_training_params()
+    as an ASCII PLY.  Every vector is exploded into scalar properties so
+    common viewers (MeshLab, CloudCompare) understand it.
+    """
+    names = arr.dtype.names
+    n     = len(arr)
     with open(fn, 'w') as f:
-        # Header
-        f.write("ply\n")
-        f.write("format ascii 1.0\n")
-        f.write(f"element vertex {N}\n")
+        # --- header ---------------------------------------------------------
+        f.write("ply\nformat ascii 1.0\n")
+        f.write(f"element vertex {n}\n")
         for name in names:
-            prop = 'opacity' if name == 'alpha' else name
-            dt, _ = gaussians.dtype.fields[name]
-            if dt.shape:  # vector
-                for i in range(dt.shape[0]):
-                    f.write(f"property {_ply_type(dt.base)} {prop}_{i}\n")
+            # Map field → property label(s)
+            if name == 'pw':
+                labels = ('x','y','z')
+            elif name == 'rot':
+                labels = ('qw','qx','qy','qz')
+            elif name == 'scale':
+                labels = ('sx','sy','sz')
+            elif name == 'alpha':
+                labels = ('opacity',)
+            elif name == 'sh':
+                labels = tuple(f"sh{i}" for i in range(arr[name].shape[1]))
             else:
-                f.write(f"property {_ply_type(dt)} {prop}\n")
+                labels = (name,)  # fallback
+
+            dt, _ = arr.dtype.fields[name]
+            base  = _ply_type(dt.base if dt.shape else dt)
+
+            for lab in labels:
+                f.write(f"property {base} {lab}\n")
         f.write("end_header\n")
-        # Data rows
-        for g in gaussians:
+
+        # --- body -----------------------------------------------------------
+        for g in arr:
             vals = []
             for name in names:
-                v = g[name]
-                if isinstance(v, np.ndarray):
-                    vals.extend(v.tolist())
+                cell = g[name]
+                if isinstance(cell, np.ndarray):
+                    vals.extend(cell.tolist())
                 else:
-                    vals.append(float(v))
+                    vals.append(float(cell))
             f.write(" ".join(map(str, vals)) + "\n")
 
 # dtype generator remains unchanged
-def gsdata_type(sh_dim):
-     return [('pw', '<f4', (3,)),
-             ('rot', '<f4', (4,)),
-             ('scale', '<f4', (3,)),
-             ('alpha', '<f4'),
-             ('sh', '<f4', (sh_dim,))]
+def gsdata_type(sh_dim:int):
+    """Return a NumPy structured dtype for one Gaussian record."""
+    return [('pw',   '<f4', (3,)),      # position (x,y,z)
+            ('rot',  '<f4', (4,)),      # rotation quaternion (w,x,y,z)
+            ('scale','<f4', (3,)),      # xyz scale (standard GSplat)
+            ('alpha','<f4'),            # opacity before sigmoid
+            ('sh',   '<f4', (sh_dim,))] # RGB spherical‑harmonic coeffs
+
+
+
+
+
+def save_training_params(fn:str, params:dict):
+    """
+    Convert torch tensors in *params* to CPU numpy arrays and write either
+    a *.npy* (default) or an ASCII *.ply* depending on the file extension.
+    """
+    # unpack & move to numpy -------------------------------------------------
+    pws    = params["pws"].detach().cpu().numpy()
+    shs    = torch.cat((params["low_shs"], params["high_shs"]), 1
+                      ).detach().cpu().numpy()
+    alphas = torch.sigmoid(params["alphas_raw"]).detach().cpu().numpy().squeeze()
+    scales = torch.exp(params["scales_raw"]).detach().cpu().numpy()
+    rots   = torch.nn.functional.normalize(params["rots_raw"]
+                          ).detach().cpu().numpy()
+
+    gaussians = np.rec.fromarrays(
+        [pws, rots, scales, alphas, shs],
+        dtype = gsdata_type(shs.shape[1])
+    )
+
+    ext = os.path.splitext(fn)[1].lower()
+    if ext == '.ply':
+        write_gaussians_as_ply(fn, gaussians)
+    else:                             # fallback keeps your old workflow
+        if ext != '.npy':
+            print(f"[save_training_params] Unrecognised extension '{ext}', "
+                  "falling back to .npy")
+        np.save(fn, gaussians)

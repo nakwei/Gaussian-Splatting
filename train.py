@@ -34,7 +34,7 @@ if __name__ == "__main__":
 
     optimizer = optim.Adam(adam_params, lr=0.000, eps=1e-15) #we can fine tune these
 
-    epochs = 100 #we can fine tune this
+    epochs = 20 #we can fine tune this
     n = len(images)
 
     twcs = torch.stack([x.twc for x in cameras])
@@ -80,6 +80,6 @@ if __name__ == "__main__":
                     model.reset_alpha(training_params, optimizer)
 
     #this doesn't need to be a function in our implementation:
-    save_training_params('data/final.npy', training_params)
+    save_training_params('data/final.ply', training_params)
  
 
