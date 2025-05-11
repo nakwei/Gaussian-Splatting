@@ -1,18 +1,12 @@
-
+import os
 import torch
 import numpy as np
 from math import exp
-import torch.optim as optim
-import matplotlib.pyplot as plt
-import torch.nn.functional as F
-import torchvision
 from pathlib import Path
+from PIL import Image
+import torchvision.transforms.functional as TF
 import faiss
 from read_write_model import *
-from torch.autograd import Variable
-from PIL import Image
-from plyfile import PlyData, PlyElement
-#from gsmodel import *
 
 
 class Camera:
@@ -28,7 +22,6 @@ class Camera:
         self.tcw = tcw
         self.twc = -torch.linalg.inv(Rcw) @ tcw
         self.path = path
-
 
 
 
@@ -130,32 +123,45 @@ def read_points_bin_as_gau(path_to_model_file):
     
 
 #not borrowed function but mostly borrowed code:
-def get_cameras_and_images(path):
-    device = 'cuda'
 
+def get_cameras_and_images(path, *, downscale: float = 1.0, device: str = "cuda"):
+    """Return Camera list **and** list of GPU tensors for training.
+
+    If `downscale > 1`, each photo is resized on the CPU via Pillow/LANCZOS
+    before converting to a float32 tensor on the GPU.  Using `downscale = 2`
+    halves width & height (¼ pixels) and usually cuts memory 4× with negligible
+    visual impact.
+    """
     camera_params = read_cameras_binary(os.path.join(Path(path, "sparse/0"), "cameras.bin"))
     image_params = read_images_binary(os.path.join(Path(path, "sparse/0"), "images.bin"))
+
     cameras = []
     images = []
-    for image_param in image_params.values():
-        i = image_param.camera_id
-        camera_param = camera_params[i]
-        im_path = str(Path(path, "images", image_param.name))
-        image = Image.open(im_path)
 
-        w_scale = image.width/camera_param.width
-        h_scale = image.height/camera_param.height
-        fx = camera_param.params[0] * w_scale
-        fy = camera_param.params[1] * h_scale
-        cx = camera_param.params[2] * w_scale
-        cy = camera_param.params[3] * h_scale
-        Rcw = torch.from_numpy(image_param.qvec2rotmat()).to(device).to(torch.float32)
-        tcw = torch.from_numpy(image_param.tvec).to(device).to(torch.float32)
-        camera = Camera(image_param.id, image.width, image.height, fx, fy, cx, cy, Rcw, tcw, im_path)
-        image = torchvision.transforms.functional.to_tensor(image).to(device).to(torch.float32)
+    for img_par in image_params.values():
+        cam_spec = camera_params[img_par.camera_id]
+        img_path = Path(path, "images", img_par.name)
 
-        cameras.append(camera)
-        images.append(image)
+        img = Image.open(img_path).convert("RGB")
+        if downscale != 1.0:
+            w, h = img.size
+            img = img.resize((int(w / downscale), int(h / downscale)), Image.LANCZOS)
+
+        # scale intrinsics to match possible resize
+        w_scale = img.width / cam_spec.width
+        h_scale = img.height / cam_spec.height
+        fx = cam_spec.params[0] * w_scale
+        fy = cam_spec.params[1] * h_scale
+        cx = cam_spec.params[2] * w_scale
+        cy = cam_spec.params[3] * h_scale
+
+        Rcw = torch.from_numpy(img_par.qvec2rotmat()).to(device).float()
+        tcw = torch.from_numpy(img_par.tvec).to(device).float()
+
+        cameras.append(
+            Camera(img_par.id, img.width, img.height, fx, fy, cx, cy, Rcw, tcw, str(img_path))
+        )
+        images.append(TF.to_tensor(img).to(device))  # float32 in [0,1]
 
     return cameras, images
 
@@ -292,29 +298,117 @@ def get_shs(low_shs, high_shs):
     return torch.cat((low_shs, high_shs), dim=1)
 
 
+_kind_map = {
+    'f4': 'float',
+    'f8': 'double',
+    'i4': 'int',
+    'i8': 'int',
+    'u1': 'uchar',
+    'u2': 'ushort',
+    'u4': 'uint',
+}
 
-def save_training_params(fn, training_params):
-    pws = training_params["pws"]
-    shs = get_shs(training_params["low_shs"], training_params["high_shs"])
-    alphas = get_alphas(training_params["alphas_raw"])
-    scales = get_scales(training_params["scales_raw"])
-    rots = get_rots(training_params["rots_raw"])
+def _ply_type(dt):
+    code = dt.str.lstrip('<>')    # e.g. 'f4'
+    return _kind_map.get(code, 'float')
+def write_gaussians_as_ply(fn: str, arr: np.recarray) -> None:
+    """
+    Export a Gaussian‑splat recarray to an ASCII PLY that follows the
+    Graph‑DECO header convention:
 
-    rots = rots.detach().cpu().numpy()
-    scales = scales.detach().cpu().numpy()
-    shs = shs.detach().cpu().numpy()
-    alphas = alphas.detach().cpu().numpy().squeeze()
-    pws = pws.detach().cpu().numpy()
-    dtypes = gsdata_type(shs.shape[1])
-    gs = np.rec.fromarrays(
-        [pws, rots, scales, alphas, shs], dtype=dtypes)
-    np.save(fn, gs)
+        x y z
+        rot_0 rot_1 rot_2 rot_3       (w, x, y, z)
+        scale_0 scale_1 scale_2
+        opacity
+        f_dc_0 f_dc_1 f_dc_2          (degree‑0 SH RGB)
+        f_rest_0 … f_rest_44          (remaining coeffs, if any)
+
+    Any viewer that supports Gaussian splats (Polycam, Luma, Blender add‑on,
+    CloudCompare plug‑in, etc.) will load this file without warnings.
+    """
+    names = arr.dtype.names
+    n     = len(arr)
+
+    # ------------------------------------------------------------------ #
+    # 1) build a label map that matches Graph‑DECO                         #
+    # ------------------------------------------------------------------ #
+    sh_dim = arr['sh'].shape[1]  # number of SH coefficients per gaussian
+
+    label_map = {
+        'pw'   : ('x', 'y', 'z'),
+        'rot'  : tuple(f'rot_{i}'   for i in range(4)),
+        'scale': tuple(f'scale_{i}' for i in range(3)),
+        'alpha': ('opacity',),
+        'sh'   : (
+            ('f_dc_0', 'f_dc_1', 'f_dc_2') +
+            tuple(f'f_rest_{i}' for i in range(max(0, sh_dim - 3)))
+        ),
+    }
+
+    # ------------------------------------------------------------------ #
+    # 2) write header                                                    #
+    # ------------------------------------------------------------------ #
+    with open(fn, 'w') as f:
+        f.write("ply\nformat ascii 1.0\n")
+        f.write(f"element vertex {n}\n")
+
+        for name in names:
+            labels = label_map.get(name, (name,))
+            dt, _  = arr.dtype.fields[name]
+            base   = _ply_type(dt.base if dt.shape else dt)
+
+            for lab in labels:
+                f.write(f"property {base} {lab}\n")
+
+        f.write("end_header\n")
+
+        # ------------------------------------------------------------------ #
+        # 3) write body                                                     #
+        # ------------------------------------------------------------------ #
+        for g in arr:
+            row = []
+            for name in names:
+                v = g[name]
+                row.extend(v.tolist() if isinstance(v, np.ndarray) else [float(v)])
+            f.write(" ".join(map(str, row)) + "\n")
 
 # dtype generator remains unchanged
-def gsdata_type(sh_dim):
-     return [('pw', '<f4', (3,)),
-             ('rot', '<f4', (4,)),
-             ('scale', '<f4', (3,)),
-             ('alpha', '<f4'),
-             ('sh', '<f4', (sh_dim,))]
+def gsdata_type(sh_dim:int):
+    """Return a NumPy structured dtype for one Gaussian record."""
+    return [('pw',   '<f4', (3,)),      # position (x,y,z)
+            ('rot',  '<f4', (4,)),      # rotation quaternion (w,x,y,z)
+            ('scale','<f4', (3,)),      # xyz scale (standard GSplat)
+            ('alpha','<f4'),            # opacity before sigmoid
+            ('sh',   '<f4', (sh_dim,))] # RGB spherical‑harmonic coeffs
 
+
+
+
+
+def save_training_params(fn:str, params:dict):
+    """
+    Convert torch tensors in *params* to CPU numpy arrays and write either
+    a *.npy* (default) or an ASCII *.ply* depending on the file extension.
+    """
+    # unpack & move to numpy -------------------------------------------------
+    pws    = params["pws"].detach().cpu().numpy()
+    shs    = torch.cat((params["low_shs"], params["high_shs"]), 1
+                      ).detach().cpu().numpy()
+    alphas = torch.sigmoid(params["alphas_raw"]).detach().cpu().numpy().squeeze()
+    scales = torch.exp(params["scales_raw"]).detach().cpu().numpy()
+    rots   = torch.nn.functional.normalize(params["rots_raw"]
+                          ).detach().cpu().numpy()
+
+    gaussians = np.rec.fromarrays(
+        [pws, rots, scales, alphas, shs],
+        dtype = gsdata_type(shs.shape[1])
+    )
+
+    ext = os.path.splitext(fn)[1].lower()
+    if ext == '.ply':
+        write_gaussians_as_ply(fn, gaussians)
+    else:                             # fallback keeps your old workflow
+        if ext != '.npy':
+            print(f"[save_training_params] Unrecognised extension '{ext}', "
+                  "falling back to .npy")
+        np.save(fn, gaussians)

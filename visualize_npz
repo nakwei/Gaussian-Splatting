@@ -1,0 +1,28 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+
+# Load the .npz file
+data = np.load('output_guassians.npz')  # Replace with your .npz file path
+
+# Print available arrays
+print("Arrays in the .npz file:", data.files)
+
+# Extract one (or more) arrays (e.g., assume 'points' is a (N, 3) array of x, y, z)
+points = data['points']  # Change 'points' to the actual array name if different
+
+# Basic check
+assert points.shape[1] == 3, "Expected a (N, 3) array of 3D points"
+
+# Plotting
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+
+ax.scatter(points[:, 0], points[:, 1], points[:, 2], s=1)  # Adjust size as needed
+
+ax.set_xlabel('X')
+ax.set_ylabel('Y')
+ax.set_zlabel('Z')
+plt.title('3D Point Cloud')
+
+plt.show()
