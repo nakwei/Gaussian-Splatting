@@ -1,16 +1,12 @@
-
-import torch
 import os
+import torch
 import numpy as np
 from math import exp
-import torch.nn.functional as F
-import torchvision
 from pathlib import Path
+from PIL import Image
+import torchvision.transforms.functional as TF
 import faiss
 from read_write_model import *
-from torch.autograd import Variable
-from PIL import Image
-#from gsmodel import *
 
 
 class Camera:
@@ -26,7 +22,6 @@ class Camera:
         self.tcw = tcw
         self.twc = -torch.linalg.inv(Rcw) @ tcw
         self.path = path
-
 
 
 
@@ -128,32 +123,45 @@ def read_points_bin_as_gau(path_to_model_file):
     
 
 #not borrowed function but mostly borrowed code:
-def get_cameras_and_images(path):
-    device = 'cuda'
 
+def get_cameras_and_images(path, *, downscale: float = 1.0, device: str = "cuda"):
+    """Return Camera list **and** list of GPU tensors for training.
+
+    If `downscale > 1`, each photo is resized on the CPU via Pillow/LANCZOS
+    before converting to a float32 tensor on the GPU.  Using `downscale = 2`
+    halves width & height (¼ pixels) and usually cuts memory 4× with negligible
+    visual impact.
+    """
     camera_params = read_cameras_binary(os.path.join(Path(path, "sparse/0"), "cameras.bin"))
     image_params = read_images_binary(os.path.join(Path(path, "sparse/0"), "images.bin"))
+
     cameras = []
     images = []
-    for image_param in image_params.values():
-        i = image_param.camera_id
-        camera_param = camera_params[i]
-        im_path = str(Path(path, "images", image_param.name))
-        image = Image.open(im_path)
 
-        w_scale = image.width/camera_param.width
-        h_scale = image.height/camera_param.height
-        fx = camera_param.params[0] * w_scale
-        fy = camera_param.params[1] * h_scale
-        cx = camera_param.params[2] * w_scale
-        cy = camera_param.params[3] * h_scale
-        Rcw = torch.from_numpy(image_param.qvec2rotmat()).to(device).to(torch.float32)
-        tcw = torch.from_numpy(image_param.tvec).to(device).to(torch.float32)
-        camera = Camera(image_param.id, image.width, image.height, fx, fy, cx, cy, Rcw, tcw, im_path)
-        image = torchvision.transforms.functional.to_tensor(image).to(device).to(torch.float32)
+    for img_par in image_params.values():
+        cam_spec = camera_params[img_par.camera_id]
+        img_path = Path(path, "images", img_par.name)
 
-        cameras.append(camera)
-        images.append(image)
+        img = Image.open(img_path).convert("RGB")
+        if downscale != 1.0:
+            w, h = img.size
+            img = img.resize((int(w / downscale), int(h / downscale)), Image.LANCZOS)
+
+        # scale intrinsics to match possible resize
+        w_scale = img.width / cam_spec.width
+        h_scale = img.height / cam_spec.height
+        fx = cam_spec.params[0] * w_scale
+        fy = cam_spec.params[1] * h_scale
+        cx = cam_spec.params[2] * w_scale
+        cy = cam_spec.params[3] * h_scale
+
+        Rcw = torch.from_numpy(img_par.qvec2rotmat()).to(device).float()
+        tcw = torch.from_numpy(img_par.tvec).to(device).float()
+
+        cameras.append(
+            Camera(img_par.id, img.width, img.height, fx, fy, cx, cy, Rcw, tcw, str(img_path))
+        )
+        images.append(TF.to_tensor(img).to(device))  # float32 in [0,1]
 
     return cameras, images
 
