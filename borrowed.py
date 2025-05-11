@@ -289,81 +289,6 @@ def get_rots(x):
 def get_shs(low_shs, high_shs):
     return torch.cat((low_shs, high_shs), dim=1)
 
-
-_kind_map = {
-    'f4': 'float',
-    'f8': 'double',
-    'i4': 'int',
-    'i8': 'int',
-    'u1': 'uchar',
-    'u2': 'ushort',
-    'u4': 'uint',
-}
-
-def _ply_type(dt):
-    code = dt.str.lstrip('<>')    # e.g. 'f4'
-    return _kind_map.get(code, 'float')
-def write_gaussians_as_ply(fn: str, arr: np.recarray) -> None:
-    """
-    Export a Gaussian‑splat recarray to an ASCII PLY that follows the
-    Graph‑DECO header convention:
-
-        x y z
-        rot_0 rot_1 rot_2 rot_3       (w, x, y, z)
-        scale_0 scale_1 scale_2
-        opacity
-        f_dc_0 f_dc_1 f_dc_2          (degree‑0 SH RGB)
-        f_rest_0 … f_rest_44          (remaining coeffs, if any)
-
-    Any viewer that supports Gaussian splats (Polycam, Luma, Blender add‑on,
-    CloudCompare plug‑in, etc.) will load this file without warnings.
-    """
-    names = arr.dtype.names
-    n     = len(arr)
-
-    # ------------------------------------------------------------------ #
-    # 1) build a label map that matches Graph‑DECO                         #
-    # ------------------------------------------------------------------ #
-    sh_dim = arr['sh'].shape[1]  # number of SH coefficients per gaussian
-
-    label_map = {
-        'pw'   : ('x', 'y', 'z'),
-        'rot'  : tuple(f'rot_{i}'   for i in range(4)),
-        'scale': tuple(f'scale_{i}' for i in range(3)),
-        'alpha': ('opacity',),
-        'sh'   : (
-            ('f_dc_0', 'f_dc_1', 'f_dc_2') +
-            tuple(f'f_rest_{i}' for i in range(max(0, sh_dim - 3)))
-        ),
-    }
-
-    # ------------------------------------------------------------------ #
-    # 2) write header                                                    #
-    # ------------------------------------------------------------------ #
-    with open(fn, 'w') as f:
-        f.write("ply\nformat ascii 1.0\n")
-        f.write(f"element vertex {n}\n")
-
-        for name in names:
-            labels = label_map.get(name, (name,))
-            dt, _  = arr.dtype.fields[name]
-            base   = _ply_type(dt.base if dt.shape else dt)
-
-            for lab in labels:
-                f.write(f"property {base} {lab}\n")
-
-        f.write("end_header\n")
-
-        # ------------------------------------------------------------------ #
-        # 3) write body                                                     #
-        # ------------------------------------------------------------------ #
-        for g in arr:
-            row = []
-            for name in names:
-                v = g[name]
-                row.extend(v.tolist() if isinstance(v, np.ndarray) else [float(v)])
-            f.write(" ".join(map(str, row)) + "\n")
-
 # dtype generator remains unchanged
 def gsdata_type(sh_dim:int):
     """Return a NumPy structured dtype for one Gaussian record."""
@@ -372,12 +297,6 @@ def gsdata_type(sh_dim:int):
             ('scale','<f4', (3,)),      # xyz scale (standard GSplat)
             ('alpha','<f4'),            # opacity before sigmoid
             ('sh',   '<f4', (sh_dim,))] # RGB spherical‑harmonic coeffs
-
-
-
-
-
-
 
 def save_training_params(fn, training_params):
     pws = training_params["pws"]
