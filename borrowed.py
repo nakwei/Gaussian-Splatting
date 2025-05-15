@@ -28,8 +28,6 @@ class Camera:
         self.path = path
 
 
-
-
 def get_training_params(gs):
     pws = torch.from_numpy(gs['pw']).type(
         torch.float32).to('cuda').requires_grad_()
