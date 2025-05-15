@@ -33,10 +33,11 @@ direc
 │       IMG0002.jpg
 │       ....
 
-This training process also will take a while and can be finnicky. Once the training
-is complete, there should be a new folder called data with a file called final.npy. 
-This is the numpy version of our splat. The final step is then to convert into 
-.ply, which is an easier format to visualize. To do so, run
+This training process also will take a while and can be finnicky, especially regarding
+CUDA/GPU usage. Once the training is complete, there should be a new folder called 
+data with a file called final.npy. This is the numpy version of our splat. The 
+final step is then to convert into .ply, which is an easier format to visualize. 
+To do so, run
 
 python3 npy2ply.py <source_file.npy> <output_file.ply>
 
