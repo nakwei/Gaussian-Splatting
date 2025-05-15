@@ -31,34 +31,34 @@ class Camera:
 
 
 def get_training_params(gs):
-    pws = torch.from_numpy(gs['pw']).type(
+    points_world = torch.from_numpy(gs['pw']).type(
         torch.float32).to('cuda').requires_grad_()
     rots_raw = torch.from_numpy(gs['rot']).type(
         # the unactivated scales
         torch.float32).to('cuda').requires_grad_()
     scales_raw = get_scales_raw(torch.from_numpy(gs['scale']).type(
         torch.float32).to('cuda')).requires_grad_()
-    # the unactivated alphas
-    alphas_raw = get_alphas_raw(torch.from_numpy(gs['alpha'][:, np.newaxis]).type(
+    # the unactivated opacities
+    raw_opacity = get_opacity_raw(torch.from_numpy(gs['alpha'][:, np.newaxis]).type(
         torch.float32).to('cuda')).requires_grad_()
-    shs = torch.from_numpy(gs['sh']).type(
+    spherical_harmonics = torch.from_numpy(gs['sh']).type(
         torch.float32).to('cuda')
-    low_shs = shs[:, :3]
-    high_shs = torch.ones_like(low_shs).repeat(1, 15) * 0.001
-    high_shs[:, :shs[:, 3:].shape[1]] = shs[:, 3:]
-    low_shs = low_shs.requires_grad_()
-    high_shs = high_shs.requires_grad_()
-    params = {"pws": pws, "low_shs": low_shs, "high_shs": high_shs,
-                "alphas_raw": alphas_raw, "scales_raw": scales_raw, "rots_raw": rots_raw}
+    low_spherical_harmonics = spherical_harmonics[:, :3]
+    high_spherical_harmonics = torch.ones_like(low_spherical_harmonics).repeat(1, 15) * 0.001
+    high_spherical_harmonics[:, :spherical_harmonics[:, 3:].shape[1]] = spherical_harmonics[:, 3:]
+    low_spherical_harmonics = low_spherical_harmonics.requires_grad_()
+    high_spherical_harmonics = high_spherical_harmonics.requires_grad_()
+    params = {"points_world": points_world, "low_spherical_harmonics": low_spherical_harmonics, "high_spherical_harmonics": high_spherical_harmonics,
+                "raw_opacity": raw_opacity, "scales_raw": scales_raw, "rots_raw": rots_raw}
 
     adam_params = [
-        {'params': [params['pws']], 'lr': 0.001, "name": "pws"},
-        {'params': [params['low_shs']],
-            'lr': 0.001, "name": "low_shs"},
-        {'params': [params['high_shs']],
-            'lr': 0.001/20, "name": "high_shs"},
-        {'params': [params['alphas_raw']],
-            'lr': 0.05, "name": "alphas_raw"},
+        {'params': [params['points_world']], 'lr': 0.001, "name": "points_world"},
+        {'params': [params['low_spherical_harmonics']],
+            'lr': 0.001, "name": "low_spherical_harmonics"},
+        {'params': [params['high_spherical_harmonics']],
+            'lr': 0.001/20, "name": "high_spherical_harmonics"},
+        {'params': [params['raw_opacity']],
+            'lr': 0.05, "name": "raw_opacity"},
         {'params': [params['scales_raw']],
             'lr': 0.005, "name": "scales_raw"},
         {'params': [params['rots_raw']], 'lr': 0.001, "name": "rots_raw"}]
@@ -82,15 +82,15 @@ def read_points_bin_as_gau(path_to_model_file):
     points3D = {}
     with open(path_to_model_file, "rb") as fid:
         num_points = read_next_bytes(fid, 8, "Q")[0]
-        pws = np.zeros([num_points, 3])
-        shs = np.zeros([num_points, 3])
+        points_world = np.zeros([num_points, 3])
+        spherical_harmonics = np.zeros([num_points, 3])
         for i in range(num_points):
             binary_point_line_properties = read_next_bytes(
                 fid, num_bytes=43, format_char_sequence="QdddBBBd"
             )
             point3D_id = binary_point_line_properties[0]
-            pws[i] = np.array(binary_point_line_properties[1:4])
-            shs[i] = (np.array(binary_point_line_properties[4:7]) /
+            points_world[i] = np.array(binary_point_line_properties[1:4])
+            points_world[i] = (np.array(binary_point_line_properties[4:7]) /
                       255 - 0.5) / (0.28209479177387814)
             track_length = read_next_bytes(
                 fid, num_bytes=8, format_char_sequence="Q"
@@ -102,27 +102,27 @@ def read_points_bin_as_gau(path_to_model_file):
             )
         rots = np.zeros([num_points, 4])
         rots[:, 0] = 1
-        alphas = np.ones([num_points]) * 0.8
-        pws = pws.astype(np.float32)
+        opacity = np.ones([num_points]) * 0.8
+        points_world = points_world.astype(np.float32)
         rots = rots.astype(np.float32)
-        alphas = alphas.astype(np.float32)
-        shs = shs.astype(np.float32)
+        opacity = opacity.astype(np.float32)
+        spherical_harmonics = spherical_harmonics.astype(np.float32)
 
-        N, D = pws.shape
+        N, D = points_world.shape
         index = faiss.IndexFlatL2(D)
-        index.add(pws)
-        distances, indices = index.search(pws, 2)
+        index.add(points_world)
+        distances, indices = index.search(points_world, 2)
         distances = np.clip(distances[:, 1], 0.01, 3)
         scales = distances[:, np.newaxis].repeat(3, 1)
 
         dtypes = [('pw', '<f4', (3,)),
                   ('rot', '<f4', (4,)),
                   ('scale', '<f4', (3,)),
-                  ('alpha', '<f4'),
+                  ('opacity', '<f4'),
                   ('sh', '<f4', (3,))]
 
         gs = np.rec.fromarrays(
-            [pws, rots, scales, alphas, shs], dtype=dtypes)
+            [points_world, rots, scales, opacity, spherical_harmonics], dtype=dtypes)
 
         return gs
     
@@ -157,7 +157,7 @@ def get_cameras_and_images(path):
 
     return cameras, images
 
-def get_alphas_raw(x):
+def get_opacity_raw(x):
     """
     inverse of sigmoid
     """
@@ -276,7 +276,7 @@ def get_expon_lr_func(
 
     return helper
 
-def get_alphas(x):
+def get_opacity(x):
     return torch.sigmoid(x)
 
 def get_scales(x):
@@ -286,8 +286,8 @@ def get_rots(x):
     return torch.nn.functional.normalize(x)
 
 
-def get_shs(low_shs, high_shs):
-    return torch.cat((low_shs, high_shs), dim=1)
+def get_spherical_harmonics(low_spherical_harmonics, high_spherical_harmonics):
+    return torch.cat((low_spherical_harmonics, high_spherical_harmonics), dim=1)
 
 # dtype generator remains unchanged
 def gsdata_type(sh_dim:int):
@@ -295,22 +295,22 @@ def gsdata_type(sh_dim:int):
     return [('pw',   '<f4', (3,)),      # position (x,y,z)
             ('rot',  '<f4', (4,)),      # rotation quaternion (w,x,y,z)
             ('scale','<f4', (3,)),      # xyz scale (standard GSplat)
-            ('alpha','<f4'),            # opacity before sigmoid
+            ('opacity','<f4'),            # opacity before sigmoid
             ('sh',   '<f4', (sh_dim,))] # RGB spherical‑harmonic coeffs
 
 def save_training_params(fn, training_params):
-    pws = training_params["pws"]
-    shs = get_shs(training_params["low_shs"], training_params["high_shs"])
-    alphas = get_alphas(training_params["alphas_raw"])
+    points_world = training_params["points_world"]
+    spherical_harmonics = get_spherical_harmonics(training_params["low_spherical_harmonics"], training_params["high_spherical_harmonics"])
+    opacity = get_opacity(training_params["raw_opacity"])
     scales = get_scales(training_params["scales_raw"])
     rots = get_rots(training_params["rots_raw"])
 
     rots = rots.detach().cpu().numpy()
     scales = scales.detach().cpu().numpy()
-    shs = shs.detach().cpu().numpy()
-    alphas = alphas.detach().cpu().numpy().squeeze()
-    pws = pws.detach().cpu().numpy()
-    dtypes = gsdata_type(shs.shape[1])
+    spherical_harmonics = spherical_harmonics.detach().cpu().numpy()
+    opacity = opacity.detach().cpu().numpy().squeeze()
+    points_world = points_world.detach().cpu().numpy()
+    dtypes = gsdata_type(spherical_harmonics.shape[1])
     gs = np.rec.fromarrays(
-        [pws, rots, scales, alphas, shs], dtype=dtypes)
+        [points_world, rots, scales, opacity, spherical_harmonics], dtype=dtypes)
     np.save(fn, gs)
