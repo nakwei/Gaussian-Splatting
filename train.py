@@ -4,7 +4,7 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 from pathlib import Path
 from read_write_model import *
-from borrowed import *
+from gs_utils import *
 from gsmodel import *
 
 

@@ -1,6 +1,6 @@
 import torch
 import gsplatcu as gsc   
-from borrowed import *
+from gs_utils import *
  
 
 
