@@ -22,15 +22,16 @@ python3 train.py --path <directory_containing_sparse_and_images>
 
 The directory must have the following structure
 
-/sparse
-    /0
-        /cameras.bin
-        /points3D.bin
-        /images.bin
-/images
-    /IMG0001.jpg
-    /IMG0002.jpg
-    ....
+direc
+├─── sparse
+│    └─── 0
+│         └───cameras.bin
+│             points3D.bin
+│             images.bin
+└───images
+│   └───IMG0001.jpg
+│       IMG0002.jpg
+│       ....
 
 This training process also will take a while and can be finnicky. Once the training
 is complete, there should be a new folder called data with a file called final.npy. 
