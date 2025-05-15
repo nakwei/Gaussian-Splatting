@@ -107,7 +107,7 @@ if __name__ == "__main__":
                     model.update_gaussian_density(training_params, optimizer)
                 if epoch % 15 == 0:
                     print("resetting gaussian alpha …")
-                    model.reset_alpha(training_params, optimizer)
+                    model.reset_opacity(training_params, optimizer)
 
     #save
     save_training_params('data/final.npy', training_params)
