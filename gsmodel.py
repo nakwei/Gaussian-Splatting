@@ -303,3 +303,22 @@ class GSModel(torch.nn.Module):
             filter(lambda x: x["name"] == "points_world", optimizer.param_groups))[0]
         pws_param['lr'] = pws_lr
         self.iteration += 1
+
+def get_opacity(x: torch.Tensor) -> torch.Tensor:
+    """Convert raw opacity logits to the (0, 1) range using a sigmoid."""
+    return torch.sigmoid(x)
+
+
+def get_scales(x: torch.Tensor) -> torch.Tensor:
+    """Exponentiate raw scale parameters so they remain strictly positive."""
+    return torch.exp(x)
+
+
+def get_rots(x: torch.Tensor) -> torch.Tensor:
+    """L2-normalize quaternions to enforce unit-length rotations."""
+    return torch.nn.functional.normalize(x, dim=1)
+
+
+def get_spherical_harmonics(low_sh: torch.Tensor, high_sh: torch.Tensor) -> torch.Tensor:
+    """Concatenate low-order and high-order SH coefficients along the channel dim."""
+    return torch.cat((low_sh, high_sh), dim=1)
