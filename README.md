@@ -1,1 +1,1 @@
-README to be added to as project develops 
+An attempt at implementing Gaussian Splatting! 

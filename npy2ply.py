@@ -1,6 +1,9 @@
+#!/usr/bin/env python3
 import numpy as np
 import struct
 import os
+import argparse
+import sys
 
 def reorder_mapping(R: int):
     """Return mapping such that rest_read = rest_ply[mapping].
@@ -14,8 +17,8 @@ def reorder_mapping(R: int):
 
 def convert_npy_to_ply_bin(npy_path: str, ply_path: str):
     """
-    Convert a Gaussian Splat .npy file (as produced by gsplat)
-    to a binary‐little‐endian PLY that Meshlab/CloudCompare can open.
+    Convert a Gaussian-Splat .npy file (as produced by gsplat)
+    to a binary-little-endian PLY that Meshlab/CloudCompare can open.
     """
     gs = np.load(npy_path)
     num = len(gs)
@@ -24,12 +27,12 @@ def convert_npy_to_ply_bin(npy_path: str, ply_path: str):
     sh_rest_dim = sh_dim - 3
     assert sh_rest_dim % 3 == 0, "SH rest dimension must be divisible by 3"
 
-    # Build inverse mapping that undo the ordering used in gau_io.load_ply
+    # Build inverse mapping that undoes the ordering used in gau_io.load_ply
     mapping = reorder_mapping(sh_rest_dim)
     inverse_mapping = np.zeros_like(mapping)
     inverse_mapping[mapping] = np.arange(sh_rest_dim)
 
-    # Compose header ---------------------------------------------------------
+    # --------------------------- PLY header ---------------------------
     header_lines = [
         "ply",
         "format binary_little_endian 1.0",
@@ -54,18 +57,17 @@ def convert_npy_to_ply_bin(npy_path: str, ply_path: str):
     header_lines.append("end_header\n")
     header_blob = ("\n".join(header_lines)).encode("ascii")
 
-    # Prepare all arrays -----------------------------------------------------
-    pws = gs['pw']                        # (N, 3)
-    rots = gs['rot']                      # (N, 4)
-    scales_raw = np.log(gs['scale'] + 1e-8)  # inverse of exp() used in loader
+    # ------------------------ Prepare arrays --------------------------
+    pws = gs['pw']                               # (N, 3)
+    rots = gs['rot']                             # (N, 4)
+    scales_raw = np.log(gs['scale'] + 1e-8)      # undo exp() in loader
     # logistic inverse for opacity
     alpha_clipped = np.clip(gs['alpha'], 1e-7, 1 - 1e-7)
     alphas_raw = np.log(alpha_clipped / (1 - alpha_clipped))
-    sh = gs['sh']                         # (N, sh_dim)
-    # reorder SH rest coefficients into the layout expected by PLY
-    rest_ply = sh[:, 3:][:, inverse_mapping]
+    sh = gs['sh']                                # (N, sh_dim)
+    rest_ply = sh[:, 3:][:, inverse_mapping]      # reorder SH rest
 
-    # Write file -------------------------------------------------------------
+    # --------------------------- Write file ---------------------------
     with open(ply_path, "wb") as f:
         f.write(header_blob)
 
@@ -85,13 +87,20 @@ def convert_npy_to_ply_bin(npy_path: str, ply_path: str):
 
     print(f"Converted {num} gaussians from {npy_path} -> {ply_path}")
 
-# ---------------------------------------------------------------------------
-src = "final-5.npy"
-dst = "final5.ply"
+# --------------------------------------------------------------------
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Convert a Gaussian-Splat .npy file to binary-little-endian PLY"
+    )
+    parser.add_argument("src", help="Path to the source .npy file")
+    parser.add_argument("dst", help="Output PLY file path")
 
-if not os.path.exists(dst):
-    convert_npy_to_ply_bin(src, dst)
-else:
-    print("PLY already exists – skipping conversion.")
+    args = parser.parse_args(argv)
 
+    if not os.path.exists(args.dst):
+        convert_npy_to_ply_bin(args.src, args.dst)
+    else:
+        print("PLY already exists – skipping conversion.")
 
+if __name__ == "__main__":
+    sys.exit(main())
