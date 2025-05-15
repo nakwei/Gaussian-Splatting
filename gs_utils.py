@@ -32,11 +32,11 @@ def get_training_params(gs):
     points_world = torch.from_numpy(gs['pw']).type(
         torch.float32).to('cuda').requires_grad_()
     rots_raw = torch.from_numpy(gs['rot']).type(
-        # the unactivated scales
+
         torch.float32).to('cuda').requires_grad_()
     scales_raw = get_scales_raw(torch.from_numpy(gs['scale']).type(
         torch.float32).to('cuda')).requires_grad_()
-    # the unactivated opacities
+
     raw_opacity = get_opacity_raw(torch.from_numpy(gs['alpha'][:, np.newaxis]).type(
         torch.float32).to('cuda')).requires_grad_()
     spherical_harmonics = torch.from_numpy(gs['sh']).type(
@@ -71,8 +71,6 @@ def get_scales_raw(x):
         return torch.log(x)
 
 
-#we can rewrite our own version of this but i think we use for now:
-#(could/should go in read_write_model.py):
 def read_points_bin_as_gau(path_to_model_file):
     """
     read colmap points file as inital gaussians
@@ -125,7 +123,6 @@ def read_points_bin_as_gau(path_to_model_file):
         return gs
     
 
-#not borrowed function but mostly borrowed code:
 def get_cameras_and_images(path):
     device = 'cuda'
 
@@ -164,12 +161,6 @@ def get_opacity_raw(x):
     else:
         return torch.log(x/(1-x))
     
-
-
-
-
-
-#next section is all for calculating loss
 
 def gau_loss(image, gt_image, loss_lambda=0.2):
     loss_l1 = torch.abs((image - gt_image)).mean()
@@ -243,26 +234,14 @@ def get_expon_lr_func(
     this file is copied from Plenoxels
     https://github.com/sxyu/svox2/blob/ee80e2c4df8f29a407fda5729a494be94ccf9234/opt/util/util.py#L78
 
-    Continuous learning rate decay function. Adapted from JaxNeRF
-
-    The returned rate is lr_init when step=0 and lr_final when step=max_steps, and
-    is log-linearly interpolated elsewhere (equivalent to exponential decay).
-    If lr_delay_steps>0 then the learning rate will be scaled by some smooth
-    function of lr_delay_mult, such that the initial learning rate is
-    lr_init*lr_delay_mult at the beginning of optimization but will be eased back
-    to the normal learning rate when steps>lr_delay_steps.
-
-    :param conf: config subtree 'lr' or similar
-    :param max_steps: int, the number of steps during optimization.
-    :return HoF which takes step as input
     """
 
     def helper(step):
         if step < 0 or (lr_init == 0.0 and lr_final == 0.0):
-            # Disable this parameter
+
             return 0.0
         if lr_delay_steps > 0:
-            # A kind of reverse cosine decay.
+
             delay_rate = lr_delay_mult + (1 - lr_delay_mult) * np.sin(
                 0.5 * np.pi * np.clip(step / lr_delay_steps, 0, 1)
             )
@@ -273,42 +252,3 @@ def get_expon_lr_func(
         return delay_rate * log_lerp
 
     return helper
-
-def get_opacity(x):
-    return torch.sigmoid(x)
-
-def get_scales(x):
-    return torch.exp(x)
-
-def get_rots(x):
-    return torch.nn.functional.normalize(x)
-
-
-def get_spherical_harmonics(low_spherical_harmonics, high_spherical_harmonics):
-    return torch.cat((low_spherical_harmonics, high_spherical_harmonics), dim=1)
-
-# dtype generator remains unchanged
-def gsdata_type(sh_dim:int):
-    """Return a NumPy structured dtype for one Gaussian record."""
-    return [('pw',   '<f4', (3,)),      # position (x,y,z)
-            ('rot',  '<f4', (4,)),      # rotation quaternion (w,x,y,z)
-            ('scale','<f4', (3,)),      # xyz scale (standard GSplat)
-            ('opacity','<f4'),            # opacity before sigmoid
-            ('sh',   '<f4', (sh_dim,))] # RGB spherical‑harmonic coeffs
-
-def save_training_params(fn, training_params):
-    points_world = training_params["points_world"]
-    spherical_harmonics = get_spherical_harmonics(training_params["low_spherical_harmonics"], training_params["high_spherical_harmonics"])
-    opacity = get_opacity(training_params["raw_opacity"])
-    scales = get_scales(training_params["scales_raw"])
-    rots = get_rots(training_params["rots_raw"])
-
-    rots = rots.detach().cpu().numpy()
-    scales = scales.detach().cpu().numpy()
-    spherical_harmonics = spherical_harmonics.detach().cpu().numpy()
-    opacity = opacity.detach().cpu().numpy().squeeze()
-    points_world = points_world.detach().cpu().numpy()
-    dtypes = gsdata_type(spherical_harmonics.shape[1])
-    gs = np.rec.fromarrays(
-        [points_world, rots, scales, opacity, spherical_harmonics], dtype=dtypes)
-    np.save(fn, gs)

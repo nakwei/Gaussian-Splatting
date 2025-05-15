@@ -16,22 +16,21 @@ class GSFunction(torch.autograd.Function):
         uv,
         cam,
     ):
-        # pw->camera frame->image
+
         uv, points_camera, depths, jacobian_uv_wrt_points = gsc.project(
             points_world, cam.Rcw, cam.tcw, cam.fx, cam.fy, cam.cx, cam.cy, True)
 
-        # find 3d gaussian
+
         covariance_3d, jacobian_covar3d_wrt_rot, jacobian_covar3d_wrt_scale = gsc.computeCov3D(
             rots, scales, depths, True)
 
-        # 2d gaussian
+
         covariance_2d, jacobian_covar2d_wrt_covar3d, jacobian_covar2d_wrt_poscam = gsc.computeCov2D(
             covariance_3d, points_camera, cam.Rcw, depths, cam.fx, cam.fy, cam.width, cam.height, True)
 
-        # color
         colors, jacobian_color_wrt_sh, jacobian_color_wrt_ptsworld = gsc.sh2Color(spherical_harmonics, points_world, cam.twc, True)
 
-        # 2d Gaussian -> image
+
         inv_covar2d, areas, jacobian_invcovar2d_wrt_covar2d = gsc.inverseCov2D(covariance_2d, depths, True)
         image, pixel_contribution, final_weights, tile_patch_range, patch_gaussian_ids =\
             gsc.splat(cam.height, cam.width,
@@ -49,7 +48,7 @@ class GSFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(context, gradient_loss_wrt_image, _):
-        # Retrieve the saved tensors and static parameters
+
         cam = context.cam
         uv, inv_covar2d, opacity, \
             depths, colors, pixel_contribution, final_weights,\
@@ -89,11 +88,11 @@ def get_training_params(gs):
     points_world = torch.from_numpy(gs['pw']).type(
         torch.float32).to('cuda').requires_grad_()
     rots_raw = torch.from_numpy(gs['rot']).type(
-        # unactivated scales
+
         torch.float32).to('cuda').requires_grad_()
     scales_raw = get_scales_raw(torch.from_numpy(gs['scale']).type(
         torch.float32).to('cuda')).requires_grad_()
-    # unactivated opacity
+
     raw_opacity = get_opacity_raw(torch.from_numpy(gs['opacity'][:, np.newaxis]).type(
         torch.float32).to('cuda')).requires_grad_()
     spherical_harmonics = torch.from_numpy(gs['sh']).type(
@@ -189,16 +188,13 @@ class GSModel(torch.nn.Module):
 
         self.uv = torch.zeros([points_world.shape[0], 2], dtype=torch.float32,
                               device='cuda', requires_grad=True)
-        # Limit the value of opacity: 0 < opacity < 1
+
         opacity = get_opacity(raw_opacity)
-        # Limit the value of scales > 0
         scales = get_scales(scales_raw)
-        # Limit the value of rot, normal of rots is 1
         rots = get_rots(rots_raw)
 
         spherical_harmonics = get_spherical_harmonics(low_spherical_harmonics, high_spherical_harmonics)
 
-        # apply GSfunction (forward)
         image, self.mask = GSFunction.apply(points_world, spherical_harmonics, opacity, scales, rots, self.uv, cam)
 
         return image
@@ -222,7 +218,7 @@ class GSModel(torch.nn.Module):
         del self.mask
 
     def update_gaussian_density(self, params, optimizer):
-        # prune too small or too big gaussian
+
         selected_by_small_opacity = params["raw_opacity"].squeeze() < get_opacity_raw(self.opacity_threshold)
         selected_by_big_scale = torch.max(params["scales_raw"], axis=1)[0] > get_scales_raw(self.big_threshold)
         selected_for_prune = torch.logical_or(selected_by_small_opacity, selected_by_big_scale)
@@ -245,7 +241,7 @@ class GSModel(torch.nn.Module):
         selected_for_clone = torch.logical_and(selected_by_grad, selected_by_scale)
         selected_for_split = torch.logical_and(selected_by_grad, torch.logical_not(selected_by_scale))
 
-        # clone gaussians
+
         pws_cloned = points_world[selected_for_clone]
         low_spherical_harmonics_cloned = low_spherical_harmonics[selected_for_clone]
         high_spherical_harmonics_cloned = high_spherical_harmonics[selected_for_clone]
@@ -257,11 +253,11 @@ class GSModel(torch.nn.Module):
         means = torch.zeros((rots_splited.size(0), 3), device="cuda")
         stds = scales[selected_for_split]
         samples = torch.normal(mean=means, std=stds)
-        # sampling new pw for splited gaussian
+
         pws_splited = points_world[selected_for_split] + \
             rotate_vector_by_quaternion(rots_splited, samples)
         opacity_splited = opacity[selected_for_split]
-        scales[selected_for_split] = scales[selected_for_split] * 0.6  # splited gaussian will go smaller
+        scales[selected_for_split] = scales[selected_for_split] * 0.6 
         scales_splited = scales[selected_for_split]
         low_spherical_harmonics_splited = low_spherical_harmonics[selected_for_split]
         high_spherical_harmonics_splited = high_spherical_harmonics[selected_for_split]
