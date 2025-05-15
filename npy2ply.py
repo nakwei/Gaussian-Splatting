@@ -86,8 +86,8 @@ def convert_npy_to_ply_bin(npy_path: str, ply_path: str):
     print(f"Converted {num} gaussians from {npy_path} -> {ply_path}")
 
 # ---------------------------------------------------------------------------
-src = "final-5.npy"
-dst = "final5.ply"
+src = "final.npy"
+dst = "final.ply"
 
 if not os.path.exists(dst):
     convert_npy_to_ply_bin(src, dst)
